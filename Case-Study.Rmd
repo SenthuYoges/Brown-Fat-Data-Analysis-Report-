@@ -1,0 +1,568 @@
+---
+title: "Determine the possible factors that activate brown fat as well as confirm whether external temperature affects the activation of brown fat."
+author: "Group 11: Md Shams Rahman, Manish Suresh, Senthooran Yogeswaran"
+date: "28/03/2022"
+geometry: margin=1cm
+output: pdf_document
+df_print: kable
+---
+
+```{r include=FALSE}
+rm(list = ls())
+library(tidyverse)
+library(readxl)
+library(ggplot2)
+library(scales)
+library(gridExtra)
+library(pROC)
+library(knitr)
+brownfat.data <- read_excel("BrownFat.xls", sheet = "Data")
+```
+
+# Jobs performed by each member
+
+## __Md Shams Rahman__
+```{r echo=FALSE}
+kable(data.frame(Job = c("**Introduction**", "**Model Validation**",  "**Conclusion**", "**Report Refining**"),
+           Description = c("Investigated the background information of the case study", 
+                           "Performed the validation on the model to make sure it is sound/effective", 
+                           "Contributed in giving final conclusive statement of the case study", 
+                           "Performed grammar/refining of the case study")))
+```
+## __Senthooran Yogeswara__
+```{r echo=FALSE}
+kable(data.frame(Job = c("**Model building**", "**Model Selection**", "**Conclusion**" , "**Limitations**"),
+           Description = c("Built the models used in the case study", 
+                           "Performed model selection process for the final model used in the case study", 
+                           "Contributed in giving final conclusive statement of the case study", 
+                           "Discussed the limitations of the model we chose"))) 
+```
+## __Manish Suresh__
+
+```{r echo=FALSE}
+kable(data.frame(Job = c("**Description**", "**Data Cleaning**", "**Data Analysis**", "**Limitations**", "**References**"),
+           Description = c("Briefle described what to expect from the case study", 
+                           "Performed the cleaning process of the data and documented the process a series of steps", 
+                           "Performed the exploratory data analysis in visual format", 
+                           "Discussed the limitations of the model we chose",
+                           "Added the APA Citation at the end of the document")))
+```
+
+\newpage
+
+# Introduction
+
+### Background and Significance
+
+In this case study, the objective is to determine which biological factors impact the probability of a human having brown fat.
+
+Brown fat, also known as brown adipose tissue, refers to a special type of body fat that allows organisms to adapt to cold temperatures; it produces heat to help maintain body temperature, with its greater amount of mitochondria than white fat. It was well known that this type of fat is present in small animals or newborn humans, presumably due to their smaller form factor.$^1$ However, it was investigated that brown fat may also be present in adults. The dataset that will be used for this case study collects observations of many possible factors that may impact the presence of brown fat, including: the sex of the patient, if they have diabetes, their body temperatures for certain time periods, and more.
+
+
+### Brief description of our analyses
+
+We begin by the data cleaning process, which includes removing any unnecessary variables, rows with NA values, etc. We would then proceed with our exploratory data analysis, which includes plots of our variables and our analyses based on the results. Afterwards, we begin the model building and model selection processes, choosing our best model based on the criteria. Upon selecting said model, we will perform model validation and model diagnostics on all models and verify that they satisfy all the regression assumptions, and that our best model doesn't suffer from over-fitting with the original dataset. We will also discuss the potential limitations of our model, before finally coming to the conclusion of our case study.
+
+
+# Data Cleaning
+
+To briefly summarize this section, first removed variables that are unnecessary. We would then remove rows that containing NA values. After this, we check for duplicate values, as well as corrupted data (e.g. data record of a person having no cancer but has a cancer status or vice versa, or a diabetes, sex, or season level that does not belong to levels 1,2, . . ..etc). Finally, we would convert our dataset into a usable format, which involves converting categorical variables into a factor format, to avoid making them quantitative.
+
+1.    Removed columns that are unnecessary.
+```{r echo=TRUE}
+brownfat.working.data <- brownfat.data %>% select(-c(Id, TSH, Total_vol))
+```
+$Id$ is for organizational purposes; therefore, it provides no significant value to brown fat. \
+$TSH$ contains too many NA values. Upon further research$^2$, it was shown to have an insignificant effect to having brown fat. \
+_Total_vol_ doesn't factor into the probability of having brown fat, in fact its the other way around.
+
+2.    Checked if there is any missing data.
+```{r echo=TRUE}
+for (value in names(brownfat.working.data)){
+  index <- brownfat.working.data[,value] == "NA" 
+  if(sum(index) > 0){
+    brownfat.working.data <- brownfat.working.data[!index,]
+  }
+}
+```
+
+
+```{r include=FALSE}
+rm(value, index)
+```
+There were a few rows with missing data that were promptly removed.
+
+3.  Checked if there is any duplicate data.
+```{r echo=TRUE}
+duplicated.data.frame(brownfat.working.data) %>% 
+  enframe(.) %>%
+  filter(value == TRUE) %>% 
+  nrow(.)
+```
+There are no duplicate records, hence we can move forward with further cleaning of the data.
+
+4.  Checked if there is any corrupted data.
+```{r echo=TRUE}
+brownfat.working.data %>%
+  filter(Cancer_Status != 0 & Cancer_Status != 1) %>%
+  filter(Cancer_Type >18) %>% 
+  filter(Diabetes != 0 & Diabetes != 1) %>% 
+  nrow(.)
+```
+The process involved checking whether the categorical variables are as identified as mentioned in the data description.
+
+5.  Checked if the correct dependency is kept between cancer_status and cancer_type.
+```{r echo=TRUE}
+brownfat.working.data %>% 
+  mutate(Cancer_Verification = ifelse(Cancer_Status == 1 & Cancer_Type > 1
+                                      || Cancer_Status == 0 & Cancer_Type == 0, 1, 0)) %>% 
+  filter(Cancer_Verification == 0) %>% 
+  nrow(.)
+```
+The process involved checking whether a cancer status of 1 was properly associated with one of the given 18 cancer types, while a cancer status of 0 has cancer type 0.
+
+6.  Finally convert the data into usable format.
+```{r echo=TRUE}
+brownfat.working.data$Cancer_Status = as.numeric(brownfat.working.data$Cancer_Status)
+brownfat.working.data$Cancer_Type = as.numeric(brownfat.working.data$Cancer_Type)
+```
+Converted the categorical variables into factors.
+
+\newpage
+
+# Data Analysis
+
+### Descriptive statistics for the predictors
+
+```{r echo=FALSE}
+sexInfo <- data.frame(Group = c("Female", "Male"), 
+                      count = c(sum(brownfat.working.data$Sex == 1),
+                                sum(brownfat.working.data$Sex == 2))) %>%  arrange(desc(Group))
+
+diabetesInfo <- data.frame(Group = c("No", "Yes"), 
+                           count = c(sum(brownfat.working.data$Diabetes == 0),
+                                     sum(brownfat.working.data$Diabetes == 1))) %>% arrange(desc(Group))
+
+seasonInfo <- data.frame(Group = c("Spring", "Summer", "Autumn", "Winter"),
+                         count = c(sum(brownfat.working.data$Season == 1),
+                                   sum(brownfat.working.data$Season == 2), 
+                                   sum(brownfat.working.data$Season == 3),
+                                   sum(brownfat.working.data$Season == 4))) %>% arrange(desc(Group))
+
+cancerStatusInfo <- data.frame(Group = c("No", "Yes"), 
+                               count = c(sum(brownfat.working.data$Cancer_Status == 0),
+                                         sum(brownfat.working.data$Cancer_Status == 1))) %>% arrange(desc(Group))
+
+ct.info <- brownfat.working.data %>% select(Cancer_Type) %>% group_by(Cancer_Type) %>% summarise(count = n()) %>%  mutate(Cancer_Type = factor(Cancer_Type,
+                    levels = c(0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18),
+                    ordered = TRUE))
+cancerTypeInfo <- data.frame(ct = rep(ct.info$Cancer_Type, ct.info$count), fr = rep(round(ct.info$count/sum(ct.info$count),3), ct.info$count))
+```
+
+
+
+```{r echo=FALSE, fig.align='left', fig.width=10}
+pie.sex <- ggplot(sexInfo, aes(x = "", y = count, fill = Group)) + 
+  geom_bar(stat = "identity") + 
+  coord_polar("y", start=0) + 
+  geom_text(aes(y = count/2 + c(0, cumsum(count)[-length(count)]), label = percent(count/sum(count))), size=3) + 
+  ggtitle("Sex") + 
+  ylab("") + 
+  xlab("") +  
+  theme(panel.grid=element_blank()) + theme(axis.text.x=element_blank())
+
+pie.diabetes <- ggplot(diabetesInfo, aes(x = "", y = count, fill = Group)) + 
+  geom_bar(stat = "identity") + 
+  coord_polar("y", start=0) + 
+  geom_text(aes(y = count/2 + c(0, cumsum(count)[-length(count)]) ,label = percent(count/sum(count))), size=3) + 
+  ggtitle("Diabetes") + 
+  ylab("") + 
+  xlab("")+  
+  theme(panel.grid=element_blank()) + theme(axis.text.x=element_blank())
+
+pie.seasons <- ggplot(seasonInfo, aes(x = "", y = count, fill = Group)) + 
+  geom_bar(stat = "identity") + 
+  coord_polar("y", start=0) + 
+  geom_text(aes(y = count/2 +c(0, cumsum(count)[-length(count)]) , label = percent(count/sum(count))), size=3) + 
+  ggtitle("Season") + 
+  ylab("") + xlab("") +
+  theme(panel.grid=element_blank()) + theme(axis.text.x=element_blank())
+
+pie.cancerStatus <- ggplot(cancerStatusInfo, aes(x = "", y = count, fill = Group)) + 
+  geom_bar(stat = "identity") + 
+  coord_polar("y", start=0) + 
+  geom_text(aes(y = count/2 +c(0, cumsum(count)[-length(count)]) , label = percent(count/sum(count))), size=3) + 
+  ggtitle("Cancer Status") + 
+  ylab("") + 
+  xlab("") + 
+  theme(panel.grid=element_blank()) + theme(axis.text.x=element_blank())
+
+pie.cancerType <- ggplot(cancerTypeInfo, aes(x = ct, fill = ct)) + geom_bar(aes(y = ..count../ sum(..count..))) + 
+  geom_text(aes(x = ct, y = fr + 0.05, label = fr), size=2) + 
+  theme(legend.position = "none") +
+  ylab("Frequency") +
+  xlab("Cancer_Type")
+
+
+grid.arrange(arrangeGrob(pie.sex, pie.diabetes, pie.cancerStatus, nrow=1), arrangeGrob(pie.seasons, pie.cancerType, ncol=2), nrow = 2) 
+```
+
+```{r include=FALSE}
+rm(sexInfo, diabetesInfo, seasonInfo, cancerTypeInfo, cancerStatusInfo, ct.info,
+   pie.cancerType, pie.cancerStatus, pie.seasons, pie.diabetes, pie.sex)
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, fig.align='left', fig.width=10}
+bar.age <- ggplot(brownfat.working.data[,"Age"] %>% filter(Age > 12), aes(x=Age, y=..density..)) + 
+  geom_histogram(color="grey50", fill="deepskyblue1") + 
+  geom_density(aes(color = "red"), lwd=2) + 
+  theme(legend.position  = "None") +
+  ggtitle("Age")
+
+bar.weight <- ggplot(brownfat.working.data, aes(x=Weigth, y=..density..)) + 
+  geom_histogram(color="grey50", fill="deepskyblue1") + 
+  geom_density(aes(color = "red"), lwd=2) + 
+  theme(legend.position  = "None") + 
+  ggtitle("Weight")
+
+bar.size <- ggplot(brownfat.working.data[,"Size"] %>% filter(Size > 75), aes(x=Size, y=..density..)) + 
+  geom_histogram(color="grey50", fill="deepskyblue1") + 
+  geom_density(aes(color = "red"), lwd=2) + 
+  theme(legend.position  = "None") + 
+  ggtitle("Size")
+
+bar.bmi <- ggplot(brownfat.working.data, aes(x=BMI, y=..density..)) + 
+  geom_histogram(color="grey50", fill="deepskyblue1") + 
+  geom_density(aes(color = "red"), lwd=2) + 
+  theme(legend.position  = "None") + 
+  ggtitle("BMI")
+
+bar.glycemy <- ggplot(brownfat.working.data %>% filter(Glycemy < 30), aes(x=Glycemy, y=..density..)) + 
+  geom_histogram(color="grey50", fill="deepskyblue1") + 
+  geom_density(aes(color = "red"), lwd=2) + 
+  theme(legend.position  = "None") + 
+  ggtitle("Glycemy")
+
+bar.lbw <- ggplot(brownfat.working.data, aes(x=LBW, y=..density..)) + 
+  geom_histogram(color="grey50", fill="deepskyblue1") + 
+  geom_density(aes(color = "red"), lwd=2) + 
+  theme(legend.position  = "None") + 
+  ggtitle("LBW")
+
+bar.temp <- ggplot(brownfat.working.data, aes(x=Ext_Temp, y=..density..)) + 
+  geom_histogram(color="grey50", fill="deepskyblue1") + 
+  geom_density(aes(color = "red"), lwd=2) + 
+  theme(legend.position  = "None") + 
+  ggtitle("External Temperature")
+
+bar.2temp <- ggplot(brownfat.working.data, aes(x=`2D_Temp`, y=..density..)) + 
+  geom_histogram(color="grey50", fill="deepskyblue1") + 
+  geom_density(aes(color = "red"), lwd=2) + 
+  theme(legend.position  = "None") + 
+  ggtitle("2 Day External Temperature")
+
+bar.3temp <- ggplot(brownfat.working.data, aes(x=`3D_Temp`, y=..density..)) + 
+  geom_histogram(color="grey50", fill="deepskyblue1") + 
+  geom_density(aes(color = "red"), lwd=2) + 
+  theme(legend.position  = "None") + 
+  ggtitle("3 Day External Temperature")
+
+
+grid.arrange(arrangeGrob(bar.age, bar.weight, bar.size , ncol = 3),
+             arrangeGrob(bar.bmi, bar.glycemy, bar.lbw, ncol =3),
+             arrangeGrob(bar.temp, bar.2temp, bar.3temp, ncol =3), nrow = 3)
+```
+```{r include=FALSE}
+rm(bar.3temp, bar.temp, bar.lbw, bar.2temp, bar.glycemy, bar.bmi, bar.age, bar.weight, bar.size)
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, fig.width=9, fig.align='left', fig.height=5}
+# Temp
+factor.season.info <- brownfat.working.data %>% select(Season, Ext_Temp:`1M_Temp`, BrownFat) %>%  
+  mutate(Season.chr = ifelse(Season == 1, "Spring",
+                             ifelse(Season == 2, "Summer",
+                                    ifelse(Season == 3, "Autumn",
+                                           ifelse(Season == 4, "Winter", ""))))) %>% 
+  mutate(Season.chr = factor(Season.chr,levels = c("Spring", "Summer", "Autumn", "Winter"),ordered = TRUE))
+
+oneDay <- ggplot(factor.season.info, aes(x = Season.chr, y = Ext_Temp, fill=factor(Season))) + 
+  geom_boxplot() + xlab("Season") + 
+  ggtitle("Ext Temperature vs Season") + 
+  theme(legend.position = "None")
+
+twoDay <- ggplot(factor.season.info, aes(x = Season.chr, y = `2D_Temp`, fill=factor(Season))) + 
+  geom_boxplot() + xlab("Season") + 
+  ggtitle("2 Day Temperature vs Season") + 
+  theme(legend.position = "None")
+
+threeDay <- ggplot(factor.season.info, aes(x = Season.chr, y = `3D_Temp`, fill=factor(Season))) + 
+  geom_boxplot() + 
+  xlab("Season") + 
+  ggtitle("3 Day Temperature vs Season") + 
+  theme(legend.position = "None")
+
+oneMonth <- ggplot(factor.season.info, aes(x = Season.chr, y = `1M_Temp`, fill=factor(Season))) + 
+  geom_boxplot() + 
+  xlab("Season") + 
+  ggtitle("1 Month Temperature vs Season") + 
+  theme(legend.position = "None")
+
+grid.arrange(arrangeGrob(oneDay, twoDay, ncol = 2), arrangeGrob(threeDay, oneMonth, ncol = 2), nrow = 2)
+```
+```{r include=FALSE}
+rm(oneDay, twoDay, threeDay, oneMonth)
+```
+
+All variables are shown to be approximately normally distributed. In this case of the temperature, it would make sense to observe it in tandem with the month.
+
+### Distribution of the response variable
+
+```{r echo=FALSE, fig.height=4, fig.align='center'}
+brownFatInfo <- data.frame(Group = c("No", "Yes"), 
+                           count = c(sum(brownfat.working.data$BrownFat == 0),sum(brownfat.working.data$BrownFat == 1))) %>%
+  arrange(desc(Group))
+
+pie.brownFat <- ggplot(brownFatInfo, aes(x = "", y = count, fill = Group)) + 
+  geom_bar(stat = "identity") + 
+  coord_polar("y", start=0) + 
+  geom_text(aes(y = count/2 + c(0, cumsum(count)[-length(count)]) , label = percent(count/sum(count))), size=3) + 
+  ggtitle("Brown Fat") + 
+  ylab("") + 
+  xlab("") + 
+  theme(panel.grid=element_blank()) + theme(axis.text.x=element_blank())
+
+pie.brownFat
+```
+
+\newpage
+
+### Relationship between the response variable and important predictors
+
+```{r echo=FALSE, fig.align='left', fig.width=10}
+temp.vs.bf <- ggplot(brownfat.working.data, aes(x = Ext_Temp, y = factor(BrownFat), group = BrownFat, color=factor(BrownFat))) + 
+  geom_boxplot() +
+  theme(legend.position = "None") + 
+  ylab("Brown Fat Presence") + 
+  xlab("External Tempertature") + 
+  ggtitle("External Temperature vs Brown Fat presence")
+
+season.vs.bf <- ggplot(factor.season.info %>% filter(BrownFat == 1), aes(x = Season.chr, fill = factor(BrownFat))) + 
+  geom_bar(position = "dodge") + 
+  theme(legend.position = "none") + 
+  ylab("Brown Fat Cases") + 
+  xlab("Season") + 
+  ggtitle("Season vs Brown Fat Cases")
+
+grid.arrange(temp.vs.bf, season.vs.bf, nrow=1)
+```
+
+```{r include=FALSE}
+rm(factor.season.info, pie.brownFat, brownFatInfo, temp.vs.bf, season.vs.bf)
+```
+
+\newpage
+
+# Model Building
+
+### No Interactions model
+
+As for building the model for this data, since the response variable is a categorical variable, we need to consider a generalized linear model. Since the response is a $0$ or a $1$, the family of the model is binomial distribution. 
+
+When building generalized linear models, we want to make sure which significant predictors we do not want to remove from the model based off of their P-values. This is due to several predictors often suffering from multicollinearity. As in, the correlation among predictors is meaningless since all variables are in the model; therefore, none of them are relevant to helping with our research. A variable may seem to have little effect because it overlaps considerably with other predictors in the model; in other words, said variable is predicted well by the other predictors.
+
+We run backward, forward, and stepwise elimination, removing variables that don’t have significant p-values.
+
+```{r include=FALSE}
+main.model <- glm(formula = BrownFat ~ Ext_Temp + factor(Sex) + factor(Diabetes) + Age + factor(Season) + factor(Month) + 
+    Weigth + BMI + LBW + factor(Cancer_Status) + factor(Cancer_Type), family = binomial, data = brownfat.working.data)
+
+no.effect.model <- glm(formula = BrownFat ~ 1, family = binomial, data = brownfat.working.data)
+summary(no.effect.model)
+
+main.back.optimal <-step(main.model, direction = "backward", test = "Chisq")
+main.front.optimal <- step(no.effect.model, direction = "forward", scope = formula(main.model))
+main.both.optimal <- step(no.effect.model, direction = "both", scope = formula(main.model))
+
+back.step.main.model <- glm(formula = BrownFat ~ Ext_Temp + factor(Sex) + factor(Diabetes) + 
+    Age + factor(Season) + Weigth + LBW, family = binomial, data = brownfat.working.data)
+
+forward.step.main.model <- glm(formula = BrownFat ~ Age + factor(Sex) + BMI + Ext_Temp + 
+    factor(Diabetes) + factor(Season), family = binomial, data = brownfat.working.data)
+```
+
+The optimizations are as follows:
+```{r echo=FALSE}
+kable(data.frame(`Selection Process` = c("Backwards Step", "Forwards Step", "Stepwise"), 
+                 AIC = c(main.back.optimal$aic, main.front.optimal$aic, main.both.optimal$aic),
+                 `Significant Predictors` = c("Ext_Temp, Sex, Diabetes, Age, Season, Weight, LBW", 
+                                              "Age, Sex, BMI, Ext_Temp, Diabetes, Season",
+                                              "Age, Sex, BMI, Ext_Temp, Diabetes, Season")))
+
+```
+
+The backwards elimination model has the least AIC, which makes it the best of our no interactions models.
+### Two-Term Interactions model
+Once again, we run backward, forward, and stepwise elimination, removing variables that don’t have significant p-values.
+```{r include=FALSE}
+interaction.model <- glm(BrownFat ~ Ext_Temp*factor(Sex) + Ext_Temp*factor(Diabetes)  + Ext_Temp*Age + Ext_Temp*factor(Season) + 
+                           Ext_Temp*Weigth + Ext_Temp*LBW  + factor(Sex)*factor(Diabetes) + factor(Sex)*Age + factor(Sex)*factor(Season) +
+                           factor(Sex)*Weigth + factor(Sex)*LBW +  factor(Diabetes)*Age + factor(Diabetes)*factor(Season) +
+                           factor(Diabetes)*Weigth + factor(Diabetes)*LBW + Age*factor(Season) + Age*Weigth + Age*LBW + factor(Season)*Weigth +
+                           factor(Season)*LBW + Weigth*LBW, family = binomial, data = brownfat.working.data)
+
+interact.back.optimal <- step(interaction.model, direction = "backward")
+interact.front.optimal <- step(no.effect.model, direction = "forward", scope = formula(interaction.model))
+interact.both.optimal <- step(no.effect.model, direction = "both", scope = formula(interaction.model))
+
+interact.back.optimal$call
+
+back.step.interact.model <- glm(formula = BrownFat ~ Ext_Temp + factor(Sex) + factor(Diabetes) +
+                                  Age + factor(Season) + Weigth + LBW + Ext_Temp:factor(Season) + 
+                                  factor(Sex):factor(Diabetes) + factor(Sex):LBW + factor(Diabetes):Weigth + 
+                                  factor(Diabetes):LBW + Age:LBW + factor(Season):Weigth + 
+                                  factor(Season):LBW, family = binomial, data = brownfat.working.data)
+
+forward.step.interact.model <- glm(formula = BrownFat ~ Age + factor(Sex) + Weigth + Ext_Temp + 
+                                     factor(Diabetes) + LBW + factor(Season) + Age:factor(Sex) + 
+                                     Age:factor(Diabetes) + Weigth:LBW + Age:Weigth + Ext_Temp:factor(Season), 
+                                   family = binomial, data = brownfat.working.data)
+
+```
+
+The optimizations are as follows:
+```{r echo=FALSE}
+kable(data.frame(`Selection Process` = c("Backwards Step", "Forwards Step", "Stepwise"), 
+                 AIC = c(interact.back.optimal$aic, interact.front.optimal$aic, interact.both.optimal$aic),
+                 `Significant Predictors` = 
+                   c("Ext_Temp, Sex, Diabetes, Age, Season, Weigth, LBW, Ext_Temp:Season, Sex:Diabetes, Sex:LBW, Diabetes:Weigth, Season:LBW", 
+                 "Ext_Temp, Sex, Diabetes, Age, Season, Weigth, LBW, Age:Sex, Age:Diabetes, Weigth:LBW, Age:Weigth, Ext_Temp:Season",
+                 "Ext_Temp, Sex, Diabetes, Age, Season, Weigth, LBW, Age:Sex, Age:Diabetes, Weigth:LBW, Age:Weigth, Ext_Temp:Season")))
+
+```
+
+
+The forward/stepwise model has the least AIC, making it the best of the two-term interactions models.
+
+Comparing the backwards elimination model with no interactions to the forward/stepwise model with two-term interactions, the latter model seems to be better since it has a lower AIC value. As such, we select this model to be our best one of them all.
+
+# Model Validation
+
+The penultimate step to complete our analysis is to verify whether our best model is valid or not; we perform model validation on said model, as well as our other models to check for whether our best model overfits with our dataset. We conduct 3 different methods of model validation:
+* Computing the sensitivity, specificity and concordance rates
+* Plotting the ROC curves
+* Plotting the pearson residuals against the fitted values
+
+### Sensitivity, Specificity, and Concordance Rates
+
+```{r include=FALSE}
+n = dim(brownfat.working.data)[1]
+prop = sum(brownfat.working.data$BrownFat==1)/n
+y <- (brownfat.working.data$BrownFat==1)*1
+result.table <- data.frame()
+
+predicted <- as.numeric(fitted(back.step.main.model) > prop)
+table <- xtabs(~y + predicted)
+sens = table[2,2]/(table[2,1]+table[2,2])
+spec = table[1,1]/(table[1,1]+table[1,2])
+concord_rate = (table[1,1] + table[2,2]) / (table[1,1] + table[1,2] + table[2,1] + table[2,2])
+
+result.table <- rbind(result.table, data.frame(Model = "Main Effects with Back Elimination", Sensitivity = sens, Specificity = spec, "Concordance Rate" = concord_rate))
+
+predicted <- as.numeric(fitted(forward.step.main.model) > prop)
+table <- xtabs(~y + predicted)
+sens = table[2,2]/(table[2,1]+table[2,2])
+spec = table[1,1]/(table[1,1]+table[1,2])
+concord_rate = (table[1,1] + table[2,2]) /  (table[1,1] + table[1,2] + table[2,1] + table[2,2])
+
+result.table <- rbind(result.table, data.frame(Model = "Main Effects with Forward Elimination", Sensitivity = sens, Specificity = spec, "Concordance Rate" = concord_rate))
+
+predicted <- as.numeric(fitted(back.step.interact.model) > prop)
+table <- xtabs(~y + predicted)
+sens = table[2,2]/(table[2,1]+table[2,2])
+spec = table[1,1]/(table[1,1]+table[1,2])
+concord_rate = (table[1,1] + table[2,2]) /  (table[1,1] + table[1,2] + table[2,1] + table[2,2])
+
+result.table <- rbind(result.table, data.frame(Model = "2 interactions with Back Elimination", Sensitivity = sens, Specificity = spec, "Concordance Rate" = concord_rate))
+
+predicted <- as.numeric(fitted(forward.step.interact.model) > prop)
+table <- xtabs(~y + predicted)
+sens = table[2,2]/(table[2,1]+table[2,2])
+spec = table[1,1]/(table[1,1]+table[1,2])
+concord_rate = (table[1,1] + table[2,2]) /  (table[1,1] + table[1,2] + table[2,1] + table[2,2])
+
+result.table <- rbind(result.table, data.frame(Model = "2 interactions with Forward Elimination", Sensitivity = sens, Specificity = spec, "Concordance Rate" = concord_rate))
+```
+
+```{r echo=FALSE}
+kable(result.table)
+```
+
+Upon computing every value for each model, we can verify that all of them are over 50%, which passes validation.
+
+### ROC Curve
+```{r echo=FALSE, fig.width=9, message=FALSE, warning=FALSE}
+par(mfrow = c(2,2))
+roc1 <- roc(brownfat.working.data$BrownFat~ fitted(back.step.main.model), plot = TRUE, print.auc = TRUE, main = "Main Effect, Back elimination")
+roc2 <- roc(brownfat.working.data$BrownFat~ fitted(forward.step.main.model), plot = TRUE, print.auc = TRUE, main = "Main Effect, Forward elimination")
+roc3 <- roc(brownfat.working.data$BrownFat~ fitted(back.step.interact.model), plot = TRUE, print.auc = TRUE, main = "2 Interaction, Back elimination")
+roc4 <- roc(brownfat.working.data$BrownFat~ fitted(forward.step.interact.model), plot = TRUE, print.auc = TRUE, main = "2 Interaction, Forward elimination")
+```
+
+The ROC curves for each model are all concave; furthermore, all concordance indices are fairly large as needed.
+
+### Pearson's Residual vs Fitted Values
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, fig.align='center', fig.width=7}
+par(mfrow = c(2,2))
+plot(fitted(back.step.main.model), abs(rstandard(back.step.main.model, type="pearson")), pch=20, main = "Main Effect, Back elimination", xlab = "Fitted", ylab = "Standardized residuals")
+plot(fitted(forward.step.main.model), abs(rstandard(forward.step.main.model, type="pearson")), pch=20, main = "Main Effect, Forward elimination", xlab = "Fitted", ylab = "Standardized residuals")
+plot(fitted(back.step.interact.model), abs(rstandard(back.step.interact.model, type="pearson")), pch=20, main = " 2 Interaction, Back elimination", xlab = "Fitted", ylab = "Standardized residuals")
+plot(fitted(forward.step.interact.model), abs(rstandard(forward.step.interact.model, type="pearson")), pch=20, main = "2 Interaction, Forward elimination", xlab = "Fitted", ylab = "Standardized residuals")
+```
+
+The pearson residuals appear to be very high for every model, which means that every model does have room for error. That being said, every model still passes validation on the other two aspects, and these results don't show that our best model is any less valid than the other models.
+
+# Discussion and Conclusions
+
+### Summary
+
+Throughout our case study, we have determined that the best model to represent the factors that affect the probability of having brown fat is the model with two-term interactions found by forward selection. These factors include the following main effects: age, sex, weight, external temperature, having diabetes, lean body weight, and season. There are also the following two-term effects involved: Age:Sex, Age:Diabetes, Weight:Lean Body Weight, Age:Weight, and External Temperature:Season.
+
+This isn't enough, as some factors have a greater significance to the probability of having brown fat than others do, making them more relevant to this study. Upon looking at the factors with the smallest p-values with a confidence level of 90%, we determine the following main effects to be most significant to this case:
+
+* External Temperature; this makes sense as external temperature affects body temperature, which brown fat regulates. With each unit increase of external temperature, the probability of having brown fat decreases by approximately 4.68%.
+* Lean Body Weight; this is essentially a measure of body fat, which potentially correlates to having brown fat or not. With each unit increase of lean body weight, the probability of having brown fat increases by approximately 8.83%.
+* Season (Winter); brown fat does regulate for extreme cold temperatures, so it would make sense that the coldest season affects the presence of brown fat. When the season is winter, the probability of having brown fat decreases by approximately 33.3%.
+
+And for the two-term effects, the following are significant:
+
+* Age:Sex; Interestingly, neither age nor sex are significant with their main effects, but their interaction suggests that if one was male, then age has a significant effect on the probability of having brown fat. If one was male, then with each unit increase of age, the probability of having brown fat decreases by approximately 2.15%.
+* Age:Diabetes; Like before, neither age nor diabetes are significant on their own, but having diabetes suggests that age plays a significant role. If one did have diabetes, then with each unit increase of age, the probability of having brown fat decreases by approximately 6.02%.
+* Weight:Lean Body Weight; Lean Body Weight is dependent on weight, so it's no surprise that they share some significance as an interaction term. With each unit increase of weight $\cdot$ lean body weight, the probability of having brown fat decreases by approximately 0.07%
+* External Temperature:Season (Winter); both are significant terms, so it makes sense that their interaction is also significant; if the season was winter, then the external temperature would have a greater effect on the probability of having brown fat. When the season is winter, then with each unit increase of external temperature, the probability of having brown fat increases by approximately 3.93%.
+
+```{r eval=FALSE, include=FALSE}
+#code for finding coefs
+coefs <- data.frame(coeff = coefficients(forward.step.interact.model)) %>%  mutate(expvalue = (exp(coeff) - 1)*100)
+coefs
+```
+
+### Limitations
+
+-   Even though our research shows the confirmation of our hypothesis, external temperature affects the activation of brown fat; the inference on other variables can be a hit or miss. The reason is because the number of cases of brown fat is a mere $7%$, so our results are hardly the true to what happens in real life.
+
+-   Human biology is very complicated. Activating brown fat may be a result of many predictors that can go beyond our given dataset, although external temperature is one of the main effects. Therefore, we cannot generalize the findings and apply it outside of the context of the study due to the sample size.
+
+# References
+
+$^1$ Donald Hensrud, M. D. (2020, November 5). Brown Fat: Why you want it. Mayo Clinic. Retrieved April 9, 2022, from https://www.mayoclinic.org/healthy-lifestyle/weight-loss/expert-answers/brown-fat/faq-20058388#:~:text=Brown%20fat%2C%20also%20called%20brown,mitochondria%20than%20does%20white%20fat
+
+$^2$ Zhang J, Wu H, Ma S, Gao L, Yu C, Jing F, Zhao J. TSH promotes adiposity by inhibiting the browning of white fat. Adipocyte. 2020 Dec;9(1):264-278. doi: 10.1080/21623945.2020.1783101. PMID: 32579056; PMCID: PMC7469524=
+
+
+
+
+
+
